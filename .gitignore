@@ -1,0 +1,5 @@
+.idea/
+/target/
+/frontend/generated/
+/frontend/index.html
+*.iml
