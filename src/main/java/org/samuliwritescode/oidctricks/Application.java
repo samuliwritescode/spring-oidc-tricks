@@ -29,13 +29,14 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.client.ClientAuthorizationException;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,7 +44,13 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.IntStream;
 
 /**
@@ -84,6 +91,8 @@ public class Application {
         private final AuthenticationContext authenticationContext;
         private final OAuth2AuthorizedClientManager authorizedClientManager;
 
+        private Paragraph tokenDebug;
+
         public SecuredRoute(@Autowired AuthenticationContext authenticationContext,
                             @Autowired OAuth2AuthorizedClientManager authorizedClientManager) {
             this.authenticationContext = authenticationContext;
@@ -111,8 +120,14 @@ public class Application {
                 );
 
                 add(new Div() {{
-                    addClassNames(LumoUtility.Display.FLEX, LumoUtility.FlexDirection.ROW, LumoUtility.Gap.LARGE);
+                    addClassNames(LumoUtility.Display.FLEX,
+                            LumoUtility.FlexDirection.ROW,
+                            LumoUtility.AlignItems.CENTER,
+                            LumoUtility.Gap.MEDIUM);
                     add(new Paragraph("This is a secured route and you are the user '%s'".formatted(user.getName())));
+                    add(new Paragraph() {{
+                        tokenDebug = this;
+                    }});
                     add(new Div() {{
                         addClassNames(LumoUtility.Flex.GROW);
                     }});
@@ -136,7 +151,7 @@ public class Application {
                             query -> WebClient.create()
                                     .get()
                                     .uri("http://localhost:8080/rest/get?offset=%d&limit=%d".formatted(query.getOffset(), query.getLimit()))
-                                    .headers(headers -> headers.setBearerAuth(getAuthorizedClient().getAccessToken().getTokenValue()))
+                                    .headers(headers -> getAccessTokenValueAndRefreshIfNecessary().ifPresent(headers::setBearerAuth))
                                     .retrieve()
                                     .bodyToFlux(BackendDTO.class)
                                     .collectList()
@@ -145,7 +160,7 @@ public class Application {
                             query -> WebClient.create()
                                     .get()
                                     .uri("http://localhost:8080/rest/size")
-                                    .headers(headers -> headers.setBearerAuth(getAuthorizedClient().getAccessToken().getTokenValue()))
+                                    .headers(headers -> getAccessTokenValueAndRefreshIfNecessary().ifPresent(headers::setBearerAuth))
                                     .retrieve()
                                     .bodyToMono(Integer.class)
                                     .block()
@@ -153,34 +168,45 @@ public class Application {
                 }});
             }});
 
-            getElement().executeJs("setInterval(() => this.$server.pump(), 5000)");
+            getElement().executeJs("setInterval(() => this.$server.pump(), 30000)");
         }
 
         @ClientCallable
         void pump() {
-            try {
-                getAuthorizedClient();
-            } catch (OAuth2AuthorizationException e) {
-                getElement().executeJs("alert('You are logged out because Keycloak decided so')");
-                authenticationContext.logout();
-            }
+            getAccessTokenValueAndRefreshIfNecessary();
         }
 
-        private OAuth2AuthorizedClient getAuthorizedClient() {
+        private Optional<String> getAccessTokenValueAndRefreshIfNecessary() {
             /*
             Invoking OAuth2AuthorizedClientManager.authorize() will return the access token and refresh token and
             more importantly it will refresh the access token if it is about to expire.
 
             However, nothing will invoke the method unless explicitly done so, and for that reason this is being
-            called perpetually from the browser. This solution is a bit hacky, but until a better solution is
-            invented, it will do.
+            called perpetually from the browser (pump() method above). This solution is a bit hacky,
+            but until a better solution is invented, it will do.
              */
-            return authorizedClientManager.authorize(OAuth2AuthorizeRequest
-                    .withClientRegistrationId("keycloak")
-                    .principal(SecurityContextHolder.getContext().getAuthentication())
-                    .attribute(HttpServletRequest.class.getName(), VaadinServletRequest.getCurrent().getHttpServletRequest())
-                    .attribute(HttpServletResponse.class.getName(), VaadinServletResponse.getCurrent().getHttpServletResponse())
-                    .build());
+            try {
+                OAuth2AuthorizedClient authorizedClient = authorizedClientManager.authorize(OAuth2AuthorizeRequest
+                        .withClientRegistrationId("keycloak")
+                        .principal(SecurityContextHolder.getContext().getAuthentication())
+                        .attribute(HttpServletRequest.class.getName(), VaadinServletRequest.getCurrent().getHttpServletRequest())
+                        .attribute(HttpServletResponse.class.getName(), VaadinServletResponse.getCurrent().getHttpServletResponse())
+                        .build());
+
+                tokenDebug.setText(
+                        "Last authorized: %s, access token issued: %s, access token expires in: %s, refresh token issued: %s".formatted(
+                                LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")),
+                                authorizedClient.getAccessToken().getIssuedAt().atZone(ZoneId.systemDefault()).toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm:ss")),
+                                ChronoUnit.SECONDS.between(Instant.now(), authorizedClient.getAccessToken().getExpiresAt()) + "s",
+                                authorizedClient.getRefreshToken().getIssuedAt().atZone(ZoneId.systemDefault()).toLocalTime().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+                        ));
+
+                return Optional.of(authorizedClient.getAccessToken().getTokenValue());
+            } catch (OAuth2AuthenticationException | ClientAuthorizationException e) {
+                getElement().executeJs("alert('You are logged out because Keycloak decided so')");
+                authenticationContext.logout();
+                return Optional.empty();
+            }
         }
     }
 
