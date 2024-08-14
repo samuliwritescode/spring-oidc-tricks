@@ -3,9 +3,11 @@ package org.samuliwritescode.oidctricks;
 import com.vaadin.flow.component.ClientCallable;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
+import com.vaadin.flow.component.grid.Grid;
 import com.vaadin.flow.component.html.Anchor;
 import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.Paragraph;
+import com.vaadin.flow.data.provider.CallbackDataProvider;
 import com.vaadin.flow.router.Route;
 import com.vaadin.flow.router.RouteAlias;
 import com.vaadin.flow.server.VaadinServletRequest;
@@ -14,6 +16,7 @@ import com.vaadin.flow.server.auth.AnonymousAllowed;
 import com.vaadin.flow.spring.security.AuthenticationContext;
 import com.vaadin.flow.spring.security.UidlRedirectStrategy;
 import com.vaadin.flow.spring.security.VaadinWebSecurity;
+import com.vaadin.flow.theme.lumo.LumoUtility;
 import jakarta.annotation.security.PermitAll;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -27,6 +30,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
@@ -34,6 +38,13 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.core.OAuth2AuthorizationException;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.web.session.HttpSessionEventPublisher;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.reactive.function.client.WebClient;
+
+import java.util.List;
+import java.util.stream.IntStream;
 
 /**
  * Example application that builds on top of https://github.com/samuliwritescode/spring-oidc-minimal and expands it by
@@ -41,11 +52,30 @@ import org.springframework.security.web.session.HttpSessionEventPublisher;
  * 1. Back channel logout
  * 2. Refresh token handling
  * 3. Logout programmatically
+ * 4. Backend calls with same access token
  */
 @SpringBootApplication // <-- So that you may run this as a Spring Boot application
 public class Application {
     public static void main(String[] args) {
         SpringApplication.run(Application.class, args); // <-- So that you may run this directly as a Java application
+    }
+
+    @RestController
+    public static class Backend {
+        record DTO(String name, String description) {
+        }
+
+        @GetMapping("/rest/get")
+        List<DTO> getDTOs(@RequestParam("offset") Integer offset, @RequestParam("limit") Integer limit) {
+            return IntStream.range(offset, offset + limit)
+                    .mapToObj(i -> new DTO("Item-%d".formatted(i), "A lot of things could potentially be said about the item number %d".formatted(i)))
+                    .toList();
+        }
+
+        @GetMapping("/rest/size")
+        int getSize() {
+            return 10000;
+        }
     }
 
     @Route("secured")
@@ -60,13 +90,67 @@ public class Application {
             this.authorizedClientManager = authorizedClientManager;
             OAuth2AuthenticationToken auth = (OAuth2AuthenticationToken) SecurityContextHolder.getContext().getAuthentication();
             OidcUser user = (OidcUser) auth.getPrincipal();
+            addClassNames(LumoUtility.Display.FLEX,
+                    LumoUtility.FlexDirection.COLUMN,
+                    LumoUtility.Height.FULL,
+                    LumoUtility.Width.FULL,
+                    LumoUtility.Background.CONTRAST_10
+            );
 
-            add(new Paragraph("This is a secured route and you are the user '%s'".formatted(user.getName())));
-            add(new Button() {{
-                addThemeVariants(ButtonVariant.LUMO_PRIMARY);
-                setText("Logout programmatically");
-                //Documented at https://vaadin.com/docs/latest/flow/security/enabling-security#security-utilities
-                addClickListener(e -> authenticationContext.logout());
+            add(new Div() {{
+                addClassNames(LumoUtility.Display.FLEX,
+                        LumoUtility.FlexDirection.COLUMN,
+                        LumoUtility.Border.ALL,
+                        LumoUtility.BorderRadius.LARGE,
+                        LumoUtility.BoxShadow.MEDIUM,
+                        LumoUtility.Margin.XLARGE,
+                        LumoUtility.Padding.MEDIUM,
+                        LumoUtility.BoxSizing.BORDER,
+                        LumoUtility.Flex.GROW,
+                        LumoUtility.Background.BASE
+                );
+
+                add(new Div() {{
+                    addClassNames(LumoUtility.Display.FLEX, LumoUtility.FlexDirection.ROW, LumoUtility.Gap.LARGE);
+                    add(new Paragraph("This is a secured route and you are the user '%s'".formatted(user.getName())));
+                    add(new Div() {{
+                        addClassNames(LumoUtility.Flex.GROW);
+                    }});
+                    add(new Button() {{
+                        addThemeVariants(ButtonVariant.LUMO_PRIMARY);
+                        setText("Logout programmatically");
+                        //Documented at https://vaadin.com/docs/latest/flow/security/enabling-security#security-utilities
+                        addClickListener(e -> authenticationContext.logout());
+                    }});
+                }});
+
+                add(new Paragraph("The grid is populated by using a external REST endpoint that shares same the access token as the browser"));
+
+                record BackendDTO(String name, String description) {
+                }
+                add(new Grid<BackendDTO>() {{
+                    addClassNames(LumoUtility.Flex.GROW);
+                    addColumn(BackendDTO::name);
+                    addColumn(BackendDTO::description);
+                    setDataProvider(new CallbackDataProvider<>(
+                            query -> WebClient.create()
+                                    .get()
+                                    .uri("http://localhost:8080/rest/get?offset=%d&limit=%d".formatted(query.getOffset(), query.getLimit()))
+                                    .headers(headers -> headers.setBearerAuth(getAuthorizedClient().getAccessToken().getTokenValue()))
+                                    .retrieve()
+                                    .bodyToFlux(BackendDTO.class)
+                                    .collectList()
+                                    .block()
+                                    .stream(),
+                            query -> WebClient.create()
+                                    .get()
+                                    .uri("http://localhost:8080/rest/size")
+                                    .headers(headers -> headers.setBearerAuth(getAuthorizedClient().getAccessToken().getTokenValue()))
+                                    .retrieve()
+                                    .bodyToMono(Integer.class)
+                                    .block()
+                    ));
+                }});
             }});
 
             getElement().executeJs("setInterval(() => this.$server.pump(), 5000)");
@@ -75,24 +159,28 @@ public class Application {
         @ClientCallable
         void pump() {
             try {
-                /*
-                Invoking OAuth2AuthorizedClientManager.authorize() will return the access token and refresh token and
-                more importantly it will refresh the access token if it is about to expire.
-
-                However, nothing will invoke the method unless explicitly done so, and for that reason this is being
-                called perpetually from the browser. This solution is a bit hacky, but until a better solution is
-                invented, it will do.
-                 */
-                authorizedClientManager.authorize(OAuth2AuthorizeRequest
-                        .withClientRegistrationId("keycloak")
-                        .principal(SecurityContextHolder.getContext().getAuthentication())
-                        .attribute(HttpServletRequest.class.getName(), VaadinServletRequest.getCurrent().getHttpServletRequest())
-                        .attribute(HttpServletResponse.class.getName(), VaadinServletResponse.getCurrent().getHttpServletResponse())
-                        .build());
+                getAuthorizedClient();
             } catch (OAuth2AuthorizationException e) {
                 getElement().executeJs("alert('You are logged out because Keycloak decided so')");
                 authenticationContext.logout();
             }
+        }
+
+        private OAuth2AuthorizedClient getAuthorizedClient() {
+            /*
+            Invoking OAuth2AuthorizedClientManager.authorize() will return the access token and refresh token and
+            more importantly it will refresh the access token if it is about to expire.
+
+            However, nothing will invoke the method unless explicitly done so, and for that reason this is being
+            called perpetually from the browser. This solution is a bit hacky, but until a better solution is
+            invented, it will do.
+             */
+            return authorizedClientManager.authorize(OAuth2AuthorizeRequest
+                    .withClientRegistrationId("keycloak")
+                    .principal(SecurityContextHolder.getContext().getAuthentication())
+                    .attribute(HttpServletRequest.class.getName(), VaadinServletRequest.getCurrent().getHttpServletRequest())
+                    .attribute(HttpServletResponse.class.getName(), VaadinServletResponse.getCurrent().getHttpServletResponse())
+                    .build());
         }
     }
 
@@ -101,10 +189,32 @@ public class Application {
     @AnonymousAllowed
     public static class UnsecuredRoute extends Div {
         public UnsecuredRoute() {
-            add(new Paragraph("Welcome to unsecured route. This you may access without logging in."));
-            Anchor linkToSecuredPage = new Anchor("/secured", "This route will require you to login");
-            linkToSecuredPage.setRouterIgnore(true); // <-- So that spring security web filter will catch it
-            add(linkToSecuredPage);
+            addClassNames(LumoUtility.Display.FLEX,
+                    LumoUtility.AlignItems.CENTER,
+                    LumoUtility.JustifyContent.CENTER,
+                    LumoUtility.Height.FULL,
+                    LumoUtility.Width.FULL,
+                    LumoUtility.Background.CONTRAST_10
+            );
+
+            add(new Div() {{
+                addClassNames(
+                        LumoUtility.Background.BASE,
+                        LumoUtility.Display.FLEX,
+                        LumoUtility.FlexDirection.COLUMN,
+                        LumoUtility.AlignItems.CENTER,
+                        LumoUtility.Border.ALL,
+                        LumoUtility.BorderRadius.LARGE,
+                        LumoUtility.BoxShadow.MEDIUM,
+                        LumoUtility.Margin.XLARGE,
+                        LumoUtility.Padding.MEDIUM,
+                        LumoUtility.BoxSizing.BORDER
+                );
+                add(new Paragraph("Welcome to unsecured route. This you may access without logging in."));
+                Anchor linkToSecuredPage = new Anchor("/secured", "This route will require you to login");
+                linkToSecuredPage.setRouterIgnore(true); // <-- So that spring security web filter will catch it
+                add(linkToSecuredPage);
+            }});
         }
     }
 
@@ -130,6 +240,8 @@ public class Application {
             http.logout(c -> c.logoutSuccessHandler(logoutSuccessHandler)); // <-- Logout with oauth2 must be handled with Keycloak
             //Documented at https://docs.spring.io/spring-security/reference/servlet/oauth2/login/logout.html#configure-provider-initiated-oidc-logout
             http.oidcLogout(logout -> logout.backChannel(Customizer.withDefaults())); // <-- back channel logout from Keycloak will kill the session
+            //Documented at https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/jwt.html
+            http.oauth2ResourceServer(c -> c.jwt(Customizer.withDefaults())); // <-- Resource server is needed in REST endpoint when using shared access token
             super.configure(http);
         }
     }
