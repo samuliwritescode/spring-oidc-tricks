@@ -1,12 +1,14 @@
 package org.samuliwritescode.oidctricks;
 
 import com.vaadin.flow.component.ClientCallable;
+import com.vaadin.flow.component.UI;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.button.ButtonVariant;
 import com.vaadin.flow.component.grid.Grid;
 import com.vaadin.flow.component.html.Anchor;
 import com.vaadin.flow.component.html.Div;
 import com.vaadin.flow.component.html.Paragraph;
+import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.data.provider.CallbackDataProvider;
 import com.vaadin.flow.router.Route;
 import com.vaadin.flow.router.RouteAlias;
@@ -44,11 +46,13 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.IntStream;
@@ -147,6 +151,7 @@ public class Application {
                     addClassNames(LumoUtility.Flex.GROW);
                     addColumn(BackendDTO::name);
                     addColumn(BackendDTO::description);
+                    var ui = UI.getCurrent();
                     setDataProvider(new CallbackDataProvider<>(
                             query -> WebClient.create()
                                     .get()
@@ -154,8 +159,11 @@ public class Application {
                                     .headers(headers -> getAccessTokenValueAndRefreshIfNecessary().ifPresent(headers::setBearerAuth))
                                     .retrieve()
                                     .bodyToFlux(BackendDTO.class)
+                                    .doOnError(t -> ui.access(() -> Notification.show(t.getLocalizedMessage())))
                                     .collectList()
-                                    .block()
+                                    .onErrorReturn(Collections.emptyList())
+                                    .blockOptional(Duration.ofSeconds(30))
+                                    .orElse(Collections.emptyList())
                                     .stream(),
                             query -> WebClient.create()
                                     .get()
@@ -163,7 +171,10 @@ public class Application {
                                     .headers(headers -> getAccessTokenValueAndRefreshIfNecessary().ifPresent(headers::setBearerAuth))
                                     .retrieve()
                                     .bodyToMono(Integer.class)
-                                    .block()
+                                    .doOnError(t -> ui.access(() -> Notification.show(t.getLocalizedMessage())))
+                                    .onErrorReturn(0)
+                                    .blockOptional(Duration.ofSeconds(30))
+                                    .orElse(0)
                     ));
                 }});
             }});
