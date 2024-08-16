@@ -47,17 +47,6 @@ and second you need HttpSessionEventPublisher.
 Then by convention Spring Security has arranged the necessary endpoints and session matching
 automatically behind the scenes and this is everything needed.
 
-But because this will cause your session to be invalidated immediately, then what happens is that Vaadin will get confused
-by the server redirecting suddenly so UidlRedirectStrategy must be added to logout success handler so that it can gracefully handle
-the situation. By default Vaadin client side would attempt to recover by simply reloading the current page.
-
-```java
-public SecurityConfiguration(@Autowired ClientRegistrationRepository clientRegistrationRepository) {
-    logoutSuccessHandler = new OidcClientInitiatedLogoutSuccessHandler(clientRegistrationRepository);
-    logoutSuccessHandler.setRedirectStrategy(new UidlRedirectStrategy());
-}
-```
-
 ## Refresh token handling
 Refresh token is used to refresh the access token that usually have relatively short lifespan. Without this your access
 token will become invalid even though your session lifespan could be longer. Your application is responsible for timing and
@@ -93,7 +82,23 @@ you are using Vaadin Flow, then the usual use case is that you would have a Vaad
 the logout.
 
 Since Vaadin 23.3 initiating the logout has been easier than ever. All that is required is to invoke
-AuthenticationContext.logout()
+
+```java
+public SecuredRoute(@Autowired AuthenticationContext authenticationContext) {
+    authenticationContext.logout();
+}
+```
+
+But because this will cause your session to be invalidated immediately, then what happens is that Vaadin will get confused
+by the server redirecting suddenly so UidlRedirectStrategy must be added to logout success handler so that it can gracefully handle
+the situation. By default Vaadin client side would attempt to recover by simply reloading the current page.
+
+```java
+public SecurityConfiguration(@Autowired ClientRegistrationRepository clientRegistrationRepository) {
+    logoutSuccessHandler = new OidcClientInitiatedLogoutSuccessHandler(clientRegistrationRepository);
+    logoutSuccessHandler.setRedirectStrategy(new UidlRedirectStrategy());
+}
+```
 
 Documented at https://vaadin.com/docs/latest/flow/security/enabling-security#security-utilities
 
