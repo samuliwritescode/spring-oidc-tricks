@@ -1,8 +1,8 @@
 # A bag of tricks with OIDC and Vaadin Flow
 
-[![Watch in Youtube](http://img.youtube.com/vi/kzQ0CR4dVrs/0.jpg)](https://youtu.be/kzQ0CR4dVrs)
+<!-- [![Watch in Youtube](http://img.youtube.com/vi/kzQ0CR4dVrs/0.jpg)](https://youtu.be/kzQ0CR4dVrs)
 
-[Watch this in Youtube](https://youtu.be/kzQ0CR4dVrs)
+[Watch this in Youtube](https://youtu.be/kzQ0CR4dVrs) -->
 
 So you have a Vaadin Flow application running with Spring Boot and you have secured it with Spring Security OIDC client. 
 A very typical use case, but you have some specific requirements that you are unable to find good examples online.
